@@ -209,7 +209,18 @@
   }
 ]
 ```
+## Health-Check Benachrichtigungen – Gelesen markieren
+- **Kurzbeschreibung:** Markiert alle ungelesenen Benachrichtigungen als gelesen.  
+- **Methode:** POST  
+- **Pfad:** `/api/health-check/notifications/unread`  
+- **Header:**  
+  `Authorization: Bearer <token>`
 
+- **Response:**  
+  **Status Code:** `204 No Content`  
+  (Es wird kein Response-Body zurückgegeben)
+
+  
 ## E-Mobility Lade-Modus Konfiguration
 - Kurzbeschreibung: Konfiguration des Lade-Modus und zugehöriger Quotenparameter für das E-Mobility-System.  
 - **Methode:** PUT  
