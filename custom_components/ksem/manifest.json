@@ -1,9 +1,9 @@
 {
   "domain": "ksem",
-  "name": "KSEM Wallbox",
-  "version": "0.3.3",
-  "documentation": "https://github.com/MeisterTR/ksem",
-  "issue_tracker": "https://github.com/MeisterTR/ksem/issues",
+  "name": "Kostal Smartmeter",
+  "version": "0.4.0",
+  "documentation": "https://github.com/MeisterTR/ha-kostal-smartmeter",
+  "issue_tracker": "https://github.com/MeisterTR/ha-kostal-smartmeter/issues",
   "dependencies": [],
   "codeowners": ["@MeisterTR"],
   "config_flow": true,

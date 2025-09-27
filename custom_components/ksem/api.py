@@ -166,8 +166,11 @@ class KsemClient:
         return await self._get("/api/e-mobility/config/phaseswitching")
 
     async def set_phase_switching(self, phase_usage: int):
-        await self._put(
-            "/api/e-mobility/config/phaseswitching", json={"phase_usage": phase_usage}
+        # KSEM antwortet hier oft ohne JSON/Content-Type
+        return await self._put(
+            "/api/e-mobility/config/phaseswitching",
+            json={"phase_usage": phase_usage},
+            text_mode=True,  # <— wichtig
         )
 
     async def get_energyflow_config(self):

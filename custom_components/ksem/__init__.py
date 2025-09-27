@@ -9,6 +9,7 @@ from datetime import timedelta
 from .const import DOMAIN
 from .api import KsemClient
 from .modbus_helper import KsemModbusClient
+import asyncio
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor", "number", "select", "switch"]
@@ -34,48 +35,73 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise UpdateFailed(f"Smartmeter-Fehler: {err}")
 
     async def _update_wallbox():
+        """Robuster WB-Update:
+        - /evselist ist 'kritisch' (ohne Liste -> UpdateFailed)
+        - /details ist 'best effort' (Fehler/Timeout -> WB marked unavailable, kein UpdateFailed)
+        """
         try:
             evse_list = await client.get_evse_list()
-            result = []
-
-            for evse in evse_list:
-                uuid = evse["uuid"]
-                details = await client.get_evse_details(uuid)
-                evse.update(details)
-                result.append(evse)
-
-            try:
-                res = await client.get_phase_switching()
-                phase_usage = res.get("phase_usage", 0)
-            except Exception as err:
-                _LOGGER.warning(
-                    "Phasenumschaltung konnte nicht geladen werden: %s", err
-                )
-                phase_usage = 0
-            try:
-                config = await client.get_energyflow_config()
-            except Exception as err:
-                _LOGGER.warning(
-                    "Energiefluss-Konfiguration konnte nicht geladen werdSen: %s",
-                    err,
-                )
-                config = {}
-            try:
-                evse_state = await client.get_evse_state()
-            except Exception as err:
-                _LOGGER.warning("EVSE-Status konnte nicht geladen werden: %s", err)
-                evse_state = {}
-            return {
-                "evse": result,
-                "phase_usage_state": phase_usage,
-                "energyflow_config": config,
-                "evse_state": evse_state,
-            }
-
         except Exception as err:
             raise UpdateFailed(
-                f"Wallbox-Daten konnten nicht geladen werden: {err}"
+                f"EVSE-Liste konnte nicht geladen werden: {err}"
             ) from err
+
+        result = []
+        for evse in evse_list or []:
+            # Kopie und Basisfelder
+            wb = dict(evse)
+            uuid = wb.get("uuid")
+            state = (wb.get("state") or "").lower()
+
+            # Wenn evselist bereits einen Kommunikationsfehler signalisiert, Details überspringen
+            if "commerror" in state or "error" in state or "offline" in state:
+                wb["available"] = False
+                wb["details"] = None
+                result.append(wb)
+                continue
+
+            # Details mit Timeout 'best effort'
+            try:
+                details = await asyncio.wait_for(
+                    client.get_evse_details(uuid), timeout=5.0
+                )
+                wb["available"] = True
+                wb["details"] = details
+                wb.update(details or {})
+            except Exception as err:
+                _LOGGER.warning(
+                    "Wallbox-Details für %s nicht erreichbar: %s", uuid, err
+                )
+                wb["available"] = False
+                wb["details"] = None
+            result.append(wb)
+
+        # optionale Zusatzinfos sind nicht kritisch
+        try:
+            res = await client.get_phase_switching()
+            phase_usage = res.get("phase_usage", 0)
+        except Exception as err:
+            _LOGGER.warning("Phasenumschaltung konnte nicht geladen werden: %s", err)
+            phase_usage = 0
+        try:
+            config = await client.get_energyflow_config()
+        except Exception as err:
+            _LOGGER.warning(
+                "Energiefluss-Konfiguration konnte nicht geladen werden: %s", err
+            )
+            config = {}
+        try:
+            evse_state = await client.get_evse_state()
+        except Exception as err:
+            _LOGGER.warning("EVSE-Status konnte nicht geladen werden: %s", err)
+            evse_state = {}
+
+        return {
+            "evse": result,  # Liste kann leer sein -> System ohne Wallbox
+            "phase_usage_state": phase_usage,
+            "energyflow_config": config,
+            "evse_state": evse_state,
+        }
 
     async def _update_modbus():
         try:

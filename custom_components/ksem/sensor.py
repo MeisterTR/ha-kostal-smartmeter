@@ -8,6 +8,7 @@ from .const import DOMAIN
 from homeassistant.helpers.entity import EntityCategory
 from .modbus_map import SENSOR_DEFINITIONS
 from homeassistant.components.sensor import SensorDeviceClass
+from .helper import first_evse_from_coordinator  # <- Helper aus helper.py
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,58 +29,110 @@ async def async_setup_entry(
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
     smart = data["smart_coordinator"]
-    wallbox = data["wallbox_coordinator"]
+    wallbox = data.get("wallbox_coordinator")  # kann None sein
     modbus = data["modbus_coordinator"]
     device_info = data["device_info"]
     serial = data["serial"]
 
+    # 1) Smartmeter-Entities immer
     smartmeter_entities = [
         KsemSmartmeterSensor(smart, key, name, unit, device_info, serial)
         for key, (name, unit) in SENSOR_TYPES.items()
     ]
 
-    wallbox_entities = []
-    wallbox_device_info = None
-    for wb in wallbox.data.get("evse", []):
+    # 2) Genau EINE Wallbox (falls vorhanden)
+    wallbox_entities: list = []
+    wallbox_device_info: DeviceInfo | None = None
+    wb_entities_created = False  # Flag: wir haben schon WB-Entities erzeugt?
+
+    wb = first_evse_from_coordinator(wallbox) if wallbox else None
+    if wb:
         uuid = wb.get("uuid")
         label = wb.get("label", "Wallbox")
         model = wb.get("model", "")
         state = wb.get("state", "unbekannt")
-        details = wb.get("details", {})
-        serial = details.get("serial", uuid)
+        details = wb.get("details") or {}
+        wb_serial = details.get("serial", uuid)
         version = details.get("version", "")
 
         wallbox_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"wallbox-{uuid}")},
             name=f"Wallbox {label}",
             model=model,
-            serial_number=serial,
+            serial_number=wb_serial,
             sw_version=version,
             manufacturer="Kostal",
         )
 
         wallbox_entities.append(
-            KsemWallboxSensor(uuid, f"{label} State", model, serial, version, state)
+            KsemWallboxSensor(uuid, f"{label} State", model, wb_serial, version, state)
         )
+        wb_entities_created = True
 
+    # 3) OBIS/Modbus-Entities (für device:"wallbox" nur, wenn WB-DeviceInfo existiert)
     obis_entities = []
     for addr, spec in SENSOR_DEFINITIONS.items():
-        if spec["device"] == "smartmeter":
-            info = device_info
-        elif spec["device"] == "wallbox":
-            info = wallbox_device_info
-        else:
-            info = device_info  # fallback
+        info = (
+            wallbox_device_info
+            if spec.get("device") == "wallbox" and wallbox_device_info
+            else device_info
+        )
         obis_entities.append(KsemObisModbusSensor(modbus, addr, spec, info))
 
-    # Speichere device_info zur Weitergabe
+    # 4) Optionaler WB-Leistungssensor: nur, wenn Coordinator existiert
+    more_entities = []
+    if wallbox:
+        evse_power_entity = KsemEvseAvailablePowerSensor(
+            wallbox, wallbox_device_info or device_info
+        )
+        more_entities.append(evse_power_entity)
+
     hass.data[DOMAIN][entry.entry_id]["wallbox_device_info"] = wallbox_device_info
-
-    evse_power_entity = KsemEvseAvailablePowerSensor(wallbox, wallbox_device_info)
-
+    # 5) jetzt alles hinzufügen
     async_add_entities(
-        smartmeter_entities + wallbox_entities + [evse_power_entity] + obis_entities
+        smartmeter_entities + wallbox_entities + obis_entities + more_entities
     )
+
+    # 6) Falls beim Start noch keine WB da war: später automatisch nachziehen
+    if wallbox and not wb_entities_created:
+
+        async def _maybe_add_single_wb():
+            nonlocal wallbox_device_info, wb_entities_created
+            wb_now = first_evse_from_coordinator(wallbox)
+            if not wb_now or wb_entities_created:
+                return
+            uuid = wb_now.get("uuid")
+            label = wb_now.get("label", "Wallbox")
+            model = wb_now.get("model", "")
+            state = wb_now.get("state", "unbekannt")
+            details = wb_now.get("details") or {}
+            wb_serial = details.get("serial", uuid)
+            version = details.get("version", "")
+
+            wallbox_device_info = DeviceInfo(
+                identifiers={(DOMAIN, f"wallbox-{uuid}")},
+                name=f"Wallbox {label}",
+                model=model,
+                serial_number=wb_serial,
+                sw_version=version,
+                manufacturer="Kostal",
+            )
+            hass.data[DOMAIN][entry.entry_id]["wallbox_device_info"] = (
+                wallbox_device_info
+            )
+            new_entities = [
+                KsemWallboxSensor(
+                    uuid, f"{label} State", model, wb_serial, version, state
+                )
+            ]
+            async_add_entities(new_entities)
+            wb_entities_created = True
+
+        def _wb_listener():
+            hass.async_create_task(_maybe_add_single_wb())
+
+        wallbox.async_add_listener(_wb_listener)
+        await _maybe_add_single_wb()  # gleich einmal versuchen
 
 
 class KsemEvseAvailablePowerSensor(CoordinatorEntity, SensorEntity):
@@ -93,7 +146,7 @@ class KsemEvseAvailablePowerSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        state = self.coordinator.data.get("evse_state", {})
+        state = (self.coordinator.data or {}).get("evse_state", {})
         try:
             curtail = state.get("CurtailmentSetpoint", {})
             total_ma = (
@@ -106,7 +159,7 @@ class KsemEvseAvailablePowerSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        state = self.coordinator.data.get("evse_state", {})
+        state = (self.coordinator.data or {}).get("evse_state", {})
         attrs = {
             "Curtailment_L2": state.get("CurtailmentSetpoint", {}).get("l2", 0),
             "Curtailment_L3": state.get("CurtailmentSetpoint", {}).get("l3", 0),
