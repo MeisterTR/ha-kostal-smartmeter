@@ -34,7 +34,7 @@ jobs:
           mv ksem.zip '${{ github.workspace }}/ksem.zip'
 
       - name: ☁️ Upload zip to release
-        uses: softprops/action-gh-release@v2.2.2
+        uses: softprops/action-gh-release@v2.3.3
         if: ${{ github.event_name == 'release' }}
         with:
           files: "${{ github.workspace }}/ksem.zip"
