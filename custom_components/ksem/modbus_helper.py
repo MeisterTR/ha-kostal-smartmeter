@@ -129,7 +129,7 @@ class KsemModbusClient:
             )
 
         data = {}
-        blocks = group_register_blocks(SENSOR_DEFINITIONS)
+        blocks = group_register_blocks(SENSOR_DEFINITIONS, max_gap=0)
 
         for block in blocks:
             start = block[0][0]
