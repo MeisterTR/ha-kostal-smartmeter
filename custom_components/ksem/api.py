@@ -166,12 +166,18 @@ class KsemClient:
         return await self._get("/api/e-mobility/config/phaseswitching")
 
     async def set_phase_switching(self, phase_usage: int):
+        # Die KSEM-Weboberfläche sendet beim Umschalten BEIDE Aufrufe direkt
+        # nacheinander. "config/phaseswitching" speichert nur die Einstellung,
+        # "phaseusage" setzt sie an der Wallbox tatsächlich um.
         # KSEM antwortet hier oft ohne JSON/Content-Type
-        return await self._put(
+        payload = {"phase_usage": phase_usage}
+        res = await self._put(
             "/api/e-mobility/config/phaseswitching",
-            json={"phase_usage": phase_usage},
+            json=payload,
             text_mode=True,  # <— wichtig
         )
+        await self._put("/api/e-mobility/phaseusage", json=payload, text_mode=True)
+        return res
 
     async def get_energyflow_config(self):
         _LOGGER.info("Hole Configdaten von Energiefluss")
